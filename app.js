@@ -6,6 +6,7 @@ const LOOKUP_PROXY_URL = "https://corsproxy.org/?";
 
 const state = {
   collection: loadCollection(),
+  isLikelyIPhone: /iPhone|iPod/i.test(navigator.userAgent),
   lookup: null,
   reader: new BrowserMultiFormatReader(),
   scanControls: null,
@@ -38,12 +39,14 @@ const elements = {
   searchInput: document.querySelector("#searchInput"),
   selectedBarcode: document.querySelector("#selectedBarcode"),
   startScannerButton: document.querySelector("#startScannerButton"),
+  stopScannerButton: document.querySelector("#stopScannerButton"),
   titleInput: document.querySelector("#titleInput"),
   yearInput: document.querySelector("#yearInput"),
 };
 
 renderCollection();
 attachEvents();
+syncScannerButtons(false);
 setScannerMessage(
   "Use Live Scan on supporting devices, or use Scan From Photo on iPhone to capture the barcode with the rear camera."
 );
@@ -51,6 +54,7 @@ registerServiceWorker();
 
 function attachEvents() {
   elements.startScannerButton.addEventListener("click", startLiveScanner);
+  elements.stopScannerButton.addEventListener("click", stopScanner);
   elements.lookupBarcodeButton.addEventListener("click", lookupSelectedBarcode);
   elements.gameForm.addEventListener("submit", handleGameSubmit);
   elements.imageInput.addEventListener("change", handleImageScan);
@@ -83,19 +87,19 @@ async function startLiveScanner() {
 
   try {
     elements.cameraPreview.style.display = "block";
-    state.scanControls = await state.reader.decodeFromConstraints(
-      {
-        audio: false,
-        video: {
-          facingMode: { ideal: "environment" },
-        },
-      },
+    elements.startScannerButton.disabled = true;
+    elements.stopScannerButton.disabled = false;
+
+    const preferredDeviceId = await getPreferredCameraDeviceId();
+    state.scanControls = await state.reader.decodeFromVideoDevice(
+      preferredDeviceId,
       elements.cameraPreview,
       (result, error, controls) => {
         if (result?.getText()) {
           applyDetectedBarcode(result.getText());
           controls.stop();
           state.scanControls = null;
+          syncScannerButtons(false);
           return;
         }
 
@@ -105,9 +109,14 @@ async function startLiveScanner() {
       }
     );
 
-    setScannerMessage("Live scanner started. If iPhone camera preview is flaky, use Scan From Photo instead.");
+    setScannerMessage(
+      state.isLikelyIPhone
+        ? "Live scanner started. If the preview opens but won't detect, tap Stop and use Scan From Photo."
+        : "Live scanner started. Hold the barcode steady and fill the frame."
+    );
   } catch (error) {
     console.error(error);
+    syncScannerButtons(false);
     setScannerMessage("Live scanning could not start. Scan From Photo is the most reliable fallback on iPhone.");
   }
 }
@@ -120,6 +129,30 @@ function stopScanner() {
 
   elements.cameraPreview.pause();
   elements.cameraPreview.srcObject = null;
+  syncScannerButtons(false);
+}
+
+async function getPreferredCameraDeviceId() {
+  try {
+    const tempStream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {
+        facingMode: { ideal: "environment" },
+      },
+    });
+    tempStream.getTracks().forEach((track) => track.stop());
+
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const cameras = devices.filter((device) => device.kind === "videoinput");
+    const preferredCamera = cameras.find((device) =>
+      /(back|rear|environment)/i.test(device.label)
+    );
+
+    return preferredCamera?.deviceId;
+  } catch (error) {
+    console.warn("Could not select a preferred camera device", error);
+    return undefined;
+  }
 }
 
 async function handleImageScan(event) {
@@ -416,6 +449,11 @@ function resetFormState(savedTitle) {
 
 function setScannerMessage(message) {
   elements.scannerMessage.textContent = message;
+}
+
+function syncScannerButtons(isScanning) {
+  elements.startScannerButton.disabled = isScanning;
+  elements.stopScannerButton.disabled = !isScanning;
 }
 
 async function registerServiceWorker() {

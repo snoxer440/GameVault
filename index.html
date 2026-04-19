@@ -46,6 +46,7 @@
           </div>
           <div class="scanner-actions">
             <button id="startScannerButton" class="button primary">Live Scan</button>
+            <button id="stopScannerButton" class="button ghost" type="button">Stop</button>
             <label class="button secondary file-button">
               Scan From Photo
               <input id="imageInput" type="file" accept="image/*" capture="environment">
@@ -54,7 +55,7 @@
         </div>
 
         <div class="camera-frame">
-          <video id="cameraPreview" playsinline muted></video>
+          <video id="cameraPreview" playsinline muted autoplay></video>
           <div id="scannerOverlay" class="scanner-overlay">
             <span>Point the barcode inside the frame</span>
           </div>
