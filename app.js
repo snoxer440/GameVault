@@ -1,16 +1,16 @@
-import { BrowserMultiFormatReader, NotFoundException } from "https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/+esm";
-
-const BUILD_VERSION = "2026-04-19-lookup-fix-2";
+const BUILD_VERSION = "2026-04-19-lookup-fix-3";
 const STORAGE_KEY = "checkpoint-shelf-games";
 const UPC_LOOKUP_URL = "https://api.upcitemdb.com/prod/trial/lookup";
 const LOOKUP_PROXY_URL = "https://corsproxy.org/?";
+const ZXING_MODULE_URL = "https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/+esm";
 
 const state = {
   autoSaveOnLookup: false,
-  burstStartTime: 0,
-  charsSinceBurstStart: 0,
-  collection: loadCollection(),
   barcodeLookupPending: false,
+  barcodeScannerAvailable: false,
+  barcodeScannerError: "",
+  buildVersion: BUILD_VERSION,
+  collection: loadCollection(),
   focusLockEnabled: true,
   hardwareModeEnabled: true,
   history: [],
@@ -21,7 +21,7 @@ const state = {
   queuedBarcodes: [],
   queueProcessing: false,
   recentQueuedBarcodes: new Map(),
-  reader: new BrowserMultiFormatReader(),
+  reader: null,
   scanControls: null,
   selectedBarcode: "",
 };
@@ -31,6 +31,7 @@ const elements = {
   barcodeInput: document.querySelector("#barcodeInput"),
   buildStamp: document.querySelector("#buildStamp"),
   cameraPreview: document.querySelector("#cameraPreview"),
+  clearHistoryButton: document.querySelector("#clearHistoryButton"),
   collectionCount: document.querySelector("#collectionCount"),
   collectionList: document.querySelector("#collectionList"),
   conditionInput: document.querySelector("#conditionInput"),
@@ -43,7 +44,6 @@ const elements = {
   gameCardTemplate: document.querySelector("#gameCardTemplate"),
   gameForm: document.querySelector("#gameForm"),
   hardwareModeToggle: document.querySelector("#hardwareModeToggle"),
-  clearHistoryButton: document.querySelector("#clearHistoryButton"),
   imageInput: document.querySelector("#imageInput"),
   lookupBarcodeButton: document.querySelector("#lookupBarcodeButton"),
   lookupImage: document.querySelector("#lookupImage"),
@@ -56,8 +56,8 @@ const elements = {
   queueModeToggle: document.querySelector("#queueModeToggle"),
   queuePreview: document.querySelector("#queuePreview"),
   queueStatus: document.querySelector("#queueStatus"),
-  scanPreview: document.querySelector("#scanPreview"),
   scanHistory: document.querySelector("#scanHistory"),
+  scanPreview: document.querySelector("#scanPreview"),
   scannerFocusStatus: document.querySelector("#scannerFocusStatus"),
   scannerMessage: document.querySelector("#scannerMessage"),
   searchInput: document.querySelector("#searchInput"),
@@ -68,28 +68,30 @@ const elements = {
   yearInput: document.querySelector("#yearInput"),
 };
 
-boot();
+void boot();
 
-function boot() {
+async function boot() {
   try {
-    renderCollection();
-    attachEvents();
     renderBuildStamp();
+    renderCollection();
+    renderScanHistory();
+    attachEvents();
     syncHardwareModeUI();
     syncScannerButtons(false);
     syncScannerFocusStatus();
     syncQueueStatus();
-    renderScanHistory();
-    setScannerMessage(
-      "Use the HW0006 Pro in Bluetooth HID mode for fast shelf scanning, or fall back to camera/photo scanning when needed."
-    );
     focusBarcodeInput();
-    unregisterServiceWorkers();
+    await unregisterServiceWorkers();
+    await loadScannerModule();
+
+    setScannerMessage(
+      state.barcodeScannerAvailable
+        ? "Use the HW0006 Pro in Bluetooth HID mode for fast shelf scanning, or use live/photo scanning when needed."
+        : "HW0006 Pro mode is ready. Camera scanning is unavailable right now, but barcode lookup and queue mode still work."
+    );
   } catch (error) {
     console.error("App boot failed", error);
-    if (elements.scannerMessage) {
-      setScannerMessage("The app hit a startup issue. Reload the page once, then try Scan From Photo if Live Scan still won't start.");
-    }
+    setScannerMessage("The app hit a startup issue. Hardware-scanner lookup should still work after a refresh.");
   }
 }
 
@@ -110,10 +112,25 @@ function attachEvents() {
   elements.queueModeToggle.addEventListener("change", handleModeToggleChange);
   elements.searchInput.addEventListener("input", renderCollection);
   elements.exportButton.addEventListener("click", exportCollection);
+  elements.scanHistory.addEventListener("click", handleHistoryActionClick);
   window.addEventListener("beforeunload", stopScanner);
   document.addEventListener("visibilitychange", syncScannerFocusStatus);
   document.addEventListener("pointerdown", handleGlobalPointerDown, true);
-  elements.scanHistory.addEventListener("click", handleHistoryActionClick);
+}
+
+async function loadScannerModule() {
+  try {
+    const module = await import(ZXING_MODULE_URL);
+    state.reader = new module.BrowserMultiFormatReader();
+    state.NotFoundException = module.NotFoundException;
+    state.barcodeScannerAvailable = true;
+    state.barcodeScannerError = "";
+  } catch (error) {
+    console.error("Scanner module failed to load", error);
+    state.barcodeScannerAvailable = false;
+    state.barcodeScannerError = "Scanner module could not be loaded.";
+    elements.startScannerButton.disabled = true;
+  }
 }
 
 function loadCollection() {
@@ -131,15 +148,16 @@ function saveCollection() {
 }
 
 async function startLiveScanner() {
-  setScannerMessage("Starting camera...");
-
-  if (!navigator.mediaDevices?.getUserMedia) {
-    setScannerMessage("This browser does not expose camera access. Use Scan From Photo or type the barcode instead.");
+  if (!state.barcodeScannerAvailable || !state.reader) {
+    setScannerMessage("Camera scanning is unavailable on this device right now. The HW0006 Pro workflow still works.");
     return;
   }
 
-  if (state.isLikelyIPhone && window.matchMedia("(display-mode: standalone)").matches) {
-    setScannerMessage("On iPhone home-screen apps, live camera can be unreliable. If nothing appears, use Scan From Photo in Safari.");
+  setScannerMessage("Starting camera...");
+
+  if (!navigator.mediaDevices?.getUserMedia) {
+    setScannerMessage("This browser does not expose camera access. Use the HW0006 Pro or type the barcode instead.");
+    return;
   }
 
   stopScanner();
@@ -162,21 +180,17 @@ async function startLiveScanner() {
           return;
         }
 
-        if (error && !(error instanceof NotFoundException)) {
+        if (error && state.NotFoundException && !(error instanceof state.NotFoundException)) {
           console.error("Live scan error", error);
         }
       }
     );
 
-    setScannerMessage(
-      state.isLikelyIPhone
-        ? "Live scanner started. If the preview opens but won't detect, tap Stop and use Scan From Photo."
-        : "Live scanner started. Hold the barcode steady and fill the frame."
-    );
+    setScannerMessage("Live scanner started. Hold the barcode steady and fill the frame.");
   } catch (error) {
     console.error(error);
     syncScannerButtons(false);
-    setScannerMessage("Live scanning could not start. Scan From Photo is the most reliable fallback on iPhone.");
+    setScannerMessage("Live scanning could not start. The HW0006 Pro workflow is still available.");
   }
 }
 
@@ -203,10 +217,7 @@ async function getPreferredCameraDeviceId() {
 
     const devices = await navigator.mediaDevices.enumerateDevices();
     const cameras = devices.filter((device) => device.kind === "videoinput");
-    const preferredCamera = cameras.find((device) =>
-      /(back|rear|environment)/i.test(device.label)
-    );
-
+    const preferredCamera = cameras.find((device) => /(back|rear|environment)/i.test(device.label));
     return preferredCamera?.deviceId;
   } catch (error) {
     console.warn("Could not select a preferred camera device", error);
@@ -220,6 +231,11 @@ async function handleImageScan(event) {
     return;
   }
 
+  if (!state.barcodeScannerAvailable || !state.reader) {
+    setScannerMessage("Image barcode decoding is unavailable right now. Use the HW0006 Pro or type the UPC.");
+    return;
+  }
+
   stopScanner();
   elements.scanPreview.src = URL.createObjectURL(file);
   elements.scanPreview.style.display = "block";
@@ -230,7 +246,7 @@ async function handleImageScan(event) {
     applyDetectedBarcode(result.getText());
   } catch (error) {
     console.error(error);
-    setScannerMessage("I couldn't decode a barcode from that image. Try a sharper photo with the bars filling more of the frame.");
+    setScannerMessage("I couldn't decode a barcode from that image. Try the HW0006 Pro or a sharper photo.");
   }
 }
 
@@ -257,6 +273,7 @@ async function lookupSelectedBarcode(options = {}) {
     const data = await fetchLookupData(barcode);
     const item = data.items?.[0];
     if (!item) {
+      updateHistoryEntry(barcode, { status: "failed", detail: "No metadata returned for this barcode." });
       setScannerMessage("No metadata was returned for that barcode. You can still add the game manually.");
       return;
     }
@@ -280,6 +297,7 @@ async function lookupSelectedBarcode(options = {}) {
       detail: duplicates.length
         ? "Match found, but a similar game already exists."
         : `Matched ${elements.titleInput.value.trim() || "game details"}.`,
+      title: elements.titleInput.value.trim(),
     });
 
     setScannerMessage(
@@ -289,8 +307,8 @@ async function lookupSelectedBarcode(options = {}) {
     );
   } catch (error) {
     console.error(error);
-    updateHistoryEntry(barcode, { status: "failed", detail: "Lookup failed or no metadata was returned." });
-    setScannerMessage("Barcode lookup failed. This can happen when the API has no match or the browser blocks the request.");
+    updateHistoryEntry(barcode, { status: "failed", detail: "Lookup failed or browser blocked the request." });
+    setScannerMessage("Barcode lookup failed. The browser or barcode API may be blocking the request.");
   } finally {
     state.barcodeLookupPending = false;
     if (triggeredFromQueue) {
@@ -466,18 +484,6 @@ function handleBarcodeInputKeydown(event) {
     }
     return;
   }
-
-  if (event.key.length !== 1) {
-    return;
-  }
-
-  const now = Date.now();
-  if (now - state.burstStartTime > 120) {
-    state.burstStartTime = now;
-    state.charsSinceBurstStart = 0;
-  }
-
-  state.charsSinceBurstStart += 1;
 }
 
 function handleBarcodeInputChange() {
@@ -524,10 +530,6 @@ function handleBarcodeBlur() {
   }
 }
 
-function handleGlobalPointerDown(event) {
-  state.pendingInteractiveTarget = event.target.closest("button, label, input, select, textarea, a");
-}
-
 function handleModeToggleChange() {
   state.hardwareModeEnabled = elements.hardwareModeToggle.checked;
   state.autoSaveOnLookup = elements.autoSaveToggle.checked;
@@ -542,6 +544,10 @@ function handleModeToggleChange() {
   }
 }
 
+function handleGlobalPointerDown(event) {
+  state.pendingInteractiveTarget = event.target.closest("button, label, input, select, textarea, a");
+}
+
 function renderCollection() {
   const query = elements.searchInput.value.trim().toLowerCase();
   const filteredGames = state.collection.filter((game) => {
@@ -549,10 +555,7 @@ function renderCollection() {
       return true;
     }
 
-    return [game.title, game.platform, game.barcode]
-      .join(" ")
-      .toLowerCase()
-      .includes(query);
+    return [game.title, game.platform, game.barcode].join(" ").toLowerCase().includes(query);
   });
 
   elements.collectionList.innerHTML = "";
@@ -620,7 +623,7 @@ function setScannerMessage(message) {
 }
 
 function syncScannerButtons(isScanning) {
-  elements.startScannerButton.disabled = isScanning;
+  elements.startScannerButton.disabled = isScanning || !state.barcodeScannerAvailable;
   elements.stopScannerButton.disabled = !isScanning;
 }
 
@@ -673,11 +676,7 @@ function renderDuplicateNotice(duplicates) {
     return;
   }
 
-  const preview = duplicates
-    .slice(0, 2)
-    .map((game) => `${game.title} (${game.platform})`)
-    .join(", ");
-
+  const preview = duplicates.slice(0, 2).map((game) => `${game.title} (${game.platform})`).join(", ");
   elements.duplicateNotice.hidden = false;
   elements.duplicateNotice.textContent = `Possible duplicate${duplicates.length > 1 ? "s" : ""}: ${preview}`;
 }
@@ -925,18 +924,6 @@ function formatHistoryStatus(status) {
       return "Failed";
     default:
       return "Seen";
-  }
-}
-
-async function registerServiceWorker() {
-  if (!("serviceWorker" in navigator)) {
-    return;
-  }
-
-  try {
-    await navigator.serviceWorker.register("./service-worker.js");
-  } catch (error) {
-    console.error("Service worker registration failed", error);
   }
 }
 
