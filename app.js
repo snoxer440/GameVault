@@ -12,6 +12,7 @@ const state = {
   barcodeLookupPending: false,
   focusLockEnabled: true,
   hardwareModeEnabled: true,
+  history: [],
   isLikelyIPhone: /iPhone|iPod/i.test(navigator.userAgent),
   lookup: null,
   queueModeEnabled: true,
@@ -39,6 +40,7 @@ const elements = {
   gameCardTemplate: document.querySelector("#gameCardTemplate"),
   gameForm: document.querySelector("#gameForm"),
   hardwareModeToggle: document.querySelector("#hardwareModeToggle"),
+  clearHistoryButton: document.querySelector("#clearHistoryButton"),
   imageInput: document.querySelector("#imageInput"),
   lookupBarcodeButton: document.querySelector("#lookupBarcodeButton"),
   lookupImage: document.querySelector("#lookupImage"),
@@ -52,6 +54,7 @@ const elements = {
   queuePreview: document.querySelector("#queuePreview"),
   queueStatus: document.querySelector("#queueStatus"),
   scanPreview: document.querySelector("#scanPreview"),
+  scanHistory: document.querySelector("#scanHistory"),
   scannerFocusStatus: document.querySelector("#scannerFocusStatus"),
   scannerMessage: document.querySelector("#scannerMessage"),
   searchInput: document.querySelector("#searchInput"),
@@ -72,6 +75,7 @@ function boot() {
     syncScannerButtons(false);
     syncScannerFocusStatus();
     syncQueueStatus();
+    renderScanHistory();
     setScannerMessage(
       "Use the HW0006 Pro in Bluetooth HID mode for fast shelf scanning, or fall back to camera/photo scanning when needed."
     );
@@ -93,6 +97,7 @@ function attachEvents() {
   elements.barcodeInput.addEventListener("input", handleBarcodeInputChange);
   elements.barcodeInput.addEventListener("focus", syncScannerFocusStatus);
   elements.barcodeInput.addEventListener("blur", handleBarcodeBlur);
+  elements.clearHistoryButton.addEventListener("click", clearScanHistory);
   elements.focusLockToggle.addEventListener("change", handleModeToggleChange);
   elements.lookupBarcodeButton.addEventListener("click", lookupSelectedBarcode);
   elements.gameForm.addEventListener("submit", handleGameSubmit);
@@ -103,6 +108,7 @@ function attachEvents() {
   elements.exportButton.addEventListener("click", exportCollection);
   window.addEventListener("beforeunload", stopScanner);
   document.addEventListener("visibilitychange", syncScannerFocusStatus);
+  elements.scanHistory.addEventListener("click", handleHistoryActionClick);
 }
 
 function loadCollection() {
@@ -238,6 +244,7 @@ async function lookupSelectedBarcode() {
   state.barcodeLookupPending = true;
   state.selectedBarcode = barcode;
   elements.selectedBarcode.textContent = barcode;
+  updateHistoryEntry(barcode, { status: "processing", detail: "Looking up barcode..." });
   setScannerMessage(`Looking up product info for barcode ${barcode}.`);
   clearLookupResult();
 
@@ -255,12 +262,20 @@ async function lookupSelectedBarcode() {
     renderDuplicateNotice(duplicates);
 
     if (state.autoSaveOnLookup && duplicates.length === 0 && canAutoSaveCurrentRecord()) {
+      updateHistoryEntry(barcode, { status: "processing", detail: "Match found. Auto-saving..." });
       saveCurrentGameFromLookup();
       if (triggeredFromQueue) {
         processQueuedBarcodes();
       }
       return;
     }
+
+    updateHistoryEntry(barcode, {
+      status: duplicates.length ? "duplicate" : "matched",
+      detail: duplicates.length
+        ? "Match found, but a similar game already exists."
+        : `Matched ${elements.titleInput.value.trim() || "game details"}.`,
+    });
 
     setScannerMessage(
       duplicates.length
@@ -269,6 +284,7 @@ async function lookupSelectedBarcode() {
     );
   } catch (error) {
     console.error(error);
+    updateHistoryEntry(barcode, { status: "failed", detail: "Lookup failed or no metadata was returned." });
     setScannerMessage("Barcode lookup failed. This can happen when the API has no match or the browser blocks the request.");
   } finally {
     state.barcodeLookupPending = false;
@@ -670,6 +686,7 @@ function saveCurrentGameFromLookup() {
   state.collection.unshift(record);
   saveCollection();
   renderCollection();
+  updateHistoryEntry(record.barcode, { status: "saved", detail: `Saved ${record.title}.`, title: record.title });
   resetFormState(record.title);
   if (state.queueProcessing) {
     state.queueProcessing = false;
@@ -693,6 +710,14 @@ function enqueueBarcode(barcode, options = {}) {
 
   state.recentQueuedBarcodes.set(trimmed, now);
   state.queuedBarcodes.push(trimmed);
+  upsertHistoryEntry(trimmed, {
+    id: crypto.randomUUID(),
+    barcode: trimmed,
+    status: "queued",
+    detail: "Waiting in queue...",
+    title: "",
+    createdAt: new Date().toISOString(),
+  });
   elements.barcodeInput.value = "";
   state.selectedBarcode = "";
   elements.selectedBarcode.textContent = "Queued";
@@ -717,6 +742,7 @@ function processQueuedBarcodes() {
   state.selectedBarcode = nextBarcode;
   elements.selectedBarcode.textContent = nextBarcode;
   renderDuplicateNotice(findPotentialDuplicates(nextBarcode, elements.titleInput.value));
+  updateHistoryEntry(nextBarcode, { status: "processing", detail: "Processing queued scan..." });
   syncQueueStatus(`Processing ${nextBarcode}`);
   lookupSelectedBarcode({ fromQueue: true });
 }
@@ -753,6 +779,127 @@ function syncQueueStatus(overrideText = "") {
   const preview = state.queuedBarcodes.slice(0, 4).join(", ");
   elements.queuePreview.hidden = false;
   elements.queuePreview.textContent = `Queued scans: ${preview}${state.queuedBarcodes.length > 4 ? "..." : ""}`;
+}
+
+function clearScanHistory() {
+  state.history = [];
+  renderScanHistory();
+}
+
+function upsertHistoryEntry(barcode, entry) {
+  const existingIndex = state.history.findIndex((item) => item.barcode === barcode && item.status !== "saved");
+  if (existingIndex >= 0) {
+    state.history[existingIndex] = {
+      ...state.history[existingIndex],
+      ...entry,
+    };
+  } else {
+    state.history.unshift(entry);
+  }
+
+  state.history = state.history.slice(0, 12);
+  renderScanHistory();
+}
+
+function updateHistoryEntry(barcode, patch) {
+  const historyItem = state.history.find((item) => item.barcode === barcode);
+  if (!historyItem) {
+    upsertHistoryEntry(barcode, {
+      id: crypto.randomUUID(),
+      barcode,
+      status: patch.status || "queued",
+      detail: patch.detail || "",
+      title: patch.title || "",
+      createdAt: new Date().toISOString(),
+    });
+    return;
+  }
+
+  Object.assign(historyItem, patch);
+  renderScanHistory();
+}
+
+function renderScanHistory() {
+  elements.scanHistory.innerHTML = "";
+
+  if (!state.history.length) {
+    const empty = document.createElement("div");
+    empty.className = "history-item";
+    empty.innerHTML = `<div class="history-meta">Recent queued and processed scans will appear here.</div>`;
+    elements.scanHistory.appendChild(empty);
+    return;
+  }
+
+  state.history.forEach((item) => {
+    const historyItem = document.createElement("article");
+    historyItem.className = "history-item";
+    historyItem.dataset.historyId = item.id;
+
+    const statusClass = `is-${item.status}`;
+    const canRetry = item.status === "failed" || item.status === "duplicate";
+    const canDismiss = item.status !== "processing";
+
+    historyItem.innerHTML = `
+      <div class="history-item__top">
+        <span class="history-code">${item.barcode}</span>
+        <span class="history-status ${statusClass}">${formatHistoryStatus(item.status)}</span>
+      </div>
+      <div class="history-meta">${item.title || item.detail || "No details yet."}</div>
+      <div class="history-item__actions">
+        ${canRetry ? `<button type="button" data-action="retry">Retry</button>` : ""}
+        ${canDismiss ? `<button type="button" data-action="dismiss">Dismiss</button>` : ""}
+      </div>
+    `;
+
+    elements.scanHistory.appendChild(historyItem);
+  });
+}
+
+function handleHistoryActionClick(event) {
+  const button = event.target.closest("button[data-action]");
+  if (!button) {
+    return;
+  }
+
+  const container = button.closest("[data-history-id]");
+  if (!container) {
+    return;
+  }
+
+  const historyItem = state.history.find((item) => item.id === container.dataset.historyId);
+  if (!historyItem) {
+    return;
+  }
+
+  if (button.dataset.action === "retry") {
+    enqueueBarcode(historyItem.barcode, { force: true });
+    updateHistoryEntry(historyItem.barcode, { status: "queued", detail: "Queued again for retry." });
+    return;
+  }
+
+  if (button.dataset.action === "dismiss") {
+    state.history = state.history.filter((item) => item.id !== historyItem.id);
+    renderScanHistory();
+  }
+}
+
+function formatHistoryStatus(status) {
+  switch (status) {
+    case "queued":
+      return "Queued";
+    case "processing":
+      return "Processing";
+    case "matched":
+      return "Matched";
+    case "saved":
+      return "Saved";
+    case "duplicate":
+      return "Duplicate";
+    case "failed":
+      return "Failed";
+    default:
+      return "Seen";
+  }
 }
 
 async function registerServiceWorker() {
