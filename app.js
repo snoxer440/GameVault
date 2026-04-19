@@ -99,7 +99,7 @@ function attachEvents() {
   elements.barcodeInput.addEventListener("blur", handleBarcodeBlur);
   elements.clearHistoryButton.addEventListener("click", clearScanHistory);
   elements.focusLockToggle.addEventListener("change", handleModeToggleChange);
-  elements.lookupBarcodeButton.addEventListener("click", lookupSelectedBarcode);
+  elements.lookupBarcodeButton.addEventListener("click", handleLookupButtonClick);
   elements.gameForm.addEventListener("submit", handleGameSubmit);
   elements.hardwareModeToggle.addEventListener("change", handleModeToggleChange);
   elements.imageInput.addEventListener("change", handleImageScan);
@@ -229,8 +229,8 @@ async function handleImageScan(event) {
   }
 }
 
-async function lookupSelectedBarcode() {
-  const triggeredFromQueue = arguments[0] && typeof arguments[0] === "object" ? arguments[0].fromQueue : false;
+async function lookupSelectedBarcode(options = {}) {
+  const triggeredFromQueue = Boolean(options.fromQueue);
   const barcode = elements.barcodeInput.value.trim();
   if (!barcode) {
     setScannerMessage("Enter or scan a barcode first so I know what to look up.");
@@ -294,6 +294,11 @@ async function lookupSelectedBarcode() {
       processQueuedBarcodes();
     }
   }
+}
+
+function handleLookupButtonClick(event) {
+  event.preventDefault();
+  lookupSelectedBarcode({ fromQueue: false });
 }
 
 async function fetchLookupData(barcode) {
