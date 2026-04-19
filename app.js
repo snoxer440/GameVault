@@ -15,6 +15,7 @@ const state = {
   history: [],
   isLikelyIPhone: /iPhone|iPod/i.test(navigator.userAgent),
   lookup: null,
+  pendingInteractiveTarget: null,
   queueModeEnabled: true,
   queuedBarcodes: [],
   queueProcessing: false,
@@ -108,6 +109,7 @@ function attachEvents() {
   elements.exportButton.addEventListener("click", exportCollection);
   window.addEventListener("beforeunload", stopScanner);
   document.addEventListener("visibilitychange", syncScannerFocusStatus);
+  document.addEventListener("pointerdown", handleGlobalPointerDown, true);
   elements.scanHistory.addEventListener("click", handleHistoryActionClick);
 }
 
@@ -298,6 +300,7 @@ async function lookupSelectedBarcode(options = {}) {
 
 function handleLookupButtonClick(event) {
   event.preventDefault();
+  setScannerMessage("Looking up barcode...");
   lookupSelectedBarcode({ fromQueue: false });
 }
 
@@ -500,7 +503,14 @@ function handleBarcodeInputChange() {
 function handleBarcodeBlur() {
   syncScannerFocusStatus();
   const activeElement = document.activeElement;
-  if (activeElement && elements.gameForm.contains(activeElement) && activeElement !== elements.barcodeInput) {
+  const pendingTarget = state.pendingInteractiveTarget;
+  state.pendingInteractiveTarget = null;
+
+  if (pendingTarget && pendingTarget !== elements.barcodeInput) {
+    return;
+  }
+
+  if (activeElement && activeElement !== elements.barcodeInput && isInteractiveElement(activeElement)) {
     return;
   }
 
@@ -509,6 +519,10 @@ function handleBarcodeBlur() {
       focusBarcodeInput();
     }, 80);
   }
+}
+
+function handleGlobalPointerDown(event) {
+  state.pendingInteractiveTarget = event.target.closest("button, label, input, select, textarea, a");
 }
 
 function handleModeToggleChange() {
@@ -632,6 +646,10 @@ function focusBarcodeInput() {
 
   elements.barcodeInput.focus({ preventScroll: true });
   syncScannerFocusStatus();
+}
+
+function isInteractiveElement(element) {
+  return Boolean(element?.closest?.("button, label, input, select, textarea, a"));
 }
 
 function findPotentialDuplicates(barcode, title) {
