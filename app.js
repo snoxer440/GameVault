@@ -44,13 +44,24 @@ const elements = {
   yearInput: document.querySelector("#yearInput"),
 };
 
-renderCollection();
-attachEvents();
-syncScannerButtons(false);
-setScannerMessage(
-  "Use Live Scan on supporting devices, or use Scan From Photo on iPhone to capture the barcode with the rear camera."
-);
-registerServiceWorker();
+boot();
+
+function boot() {
+  try {
+    renderCollection();
+    attachEvents();
+    syncScannerButtons(false);
+    setScannerMessage(
+      "Use Live Scan on supporting devices, or use Scan From Photo on iPhone to capture the barcode with the rear camera."
+    );
+    registerServiceWorker();
+  } catch (error) {
+    console.error("App boot failed", error);
+    if (elements.scannerMessage) {
+      setScannerMessage("The app hit a startup issue. Reload the page once, then try Scan From Photo if Live Scan still won't start.");
+    }
+  }
+}
 
 function attachEvents() {
   elements.startScannerButton.addEventListener("click", startLiveScanner);
@@ -78,9 +89,15 @@ function saveCollection() {
 }
 
 async function startLiveScanner() {
+  setScannerMessage("Starting camera...");
+
   if (!navigator.mediaDevices?.getUserMedia) {
     setScannerMessage("This browser does not expose camera access. Use Scan From Photo or type the barcode instead.");
     return;
+  }
+
+  if (state.isLikelyIPhone && window.matchMedia("(display-mode: standalone)").matches) {
+    setScannerMessage("On iPhone home-screen apps, live camera can be unreliable. If nothing appears, use Scan From Photo in Safari.");
   }
 
   stopScanner();

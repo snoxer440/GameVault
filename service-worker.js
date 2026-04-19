@@ -1,4 +1,4 @@
-const CACHE_NAME = "checkpoint-shelf-v1";
+const CACHE_NAME = "checkpoint-shelf-v2";
 const APP_ASSETS = [
   "./",
   "./index.html",
@@ -21,13 +21,21 @@ self.addEventListener("activate", (event) => {
 });
 
 self.addEventListener("fetch", (event) => {
+  const { request } = event;
+  const url = new URL(request.url);
+
+  // Do not cache CDN modules or API requests; stale remote assets can break the app.
+  if (url.origin !== self.location.origin) {
+    return;
+  }
+
   event.respondWith(
-    caches.match(event.request).then((cached) => {
+    caches.match(request).then((cached) => {
       if (cached) {
         return cached;
       }
 
-      return fetch(event.request).catch(() => caches.match("./index.html"));
+      return fetch(request).catch(() => caches.match("./index.html"));
     })
   );
 });
