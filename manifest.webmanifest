@@ -1,0 +1,17 @@
+{
+  "name": "Checkpoint Shelf",
+  "short_name": "Checkpoint",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#07111f",
+  "theme_color": "#07111f",
+  "description": "Scan barcodes and organize a video game collection.",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

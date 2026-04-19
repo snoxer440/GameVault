@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Checkpoint Shelf</title>
+  <meta name="theme-color" content="#07111f">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Checkpoint Shelf">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="backdrop"></div>
+  <main class="app-shell">
+    <section class="hero-card">
+      <div class="hero-copy">
+        <p class="eyebrow">Video Game Collection</p>
+        <h1>Checkpoint Shelf</h1>
+        <p class="hero-text">
+          Scan a barcode, capture the details, and keep your shelf organized without needing an account.
+        </p>
+      </div>
+      <div class="hero-stats">
+        <article>
+          <span id="collectionCount">0</span>
+          <p>games tracked</p>
+        </article>
+        <article>
+          <span id="platformCount">0</span>
+          <p>platforms</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel-grid">
+      <section class="panel scanner-panel">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Step 1</p>
+            <h2>Scan Barcode</h2>
+          </div>
+          <div class="scanner-actions">
+            <button id="startScannerButton" class="button primary">Live Scan</button>
+            <label class="button secondary file-button">
+              Scan From Photo
+              <input id="imageInput" type="file" accept="image/*" capture="environment">
+            </label>
+          </div>
+        </div>
+
+        <div class="camera-frame">
+          <video id="cameraPreview" playsinline muted></video>
+          <div id="scannerOverlay" class="scanner-overlay">
+            <span>Point the barcode inside the frame</span>
+          </div>
+          <div id="scannerMessage" class="scanner-message">
+            Camera scanning uses the browser's built-in barcode detector when available.
+          </div>
+        </div>
+
+        <div class="manual-entry">
+          <label for="barcodeInput">Barcode / UPC</label>
+          <div class="input-row">
+            <input id="barcodeInput" name="barcodeInput" placeholder="Scan or type a barcode">
+            <button id="lookupBarcodeButton" class="button secondary">Lookup</button>
+          </div>
+          <img id="scanPreview" class="scan-preview" alt="Barcode scan preview">
+        </div>
+      </section>
+
+      <section class="panel form-panel">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Step 2</p>
+            <h2>Add Game</h2>
+          </div>
+        </div>
+
+        <form id="gameForm" class="game-form">
+          <label>
+            Title
+            <input id="titleInput" name="title" placeholder="The Legend of Zelda: Breath of the Wild" required>
+          </label>
+
+          <div class="form-columns">
+            <label>
+              Platform
+              <input id="platformInput" name="platform" placeholder="Nintendo Switch" required>
+            </label>
+            <label>
+              Format
+              <select id="formatInput" name="format">
+                <option>Physical</option>
+                <option>Digital</option>
+                <option>Collector's Edition</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="form-columns">
+            <label>
+              Condition
+              <select id="conditionInput" name="condition">
+                <option>Mint</option>
+                <option>Very Good</option>
+                <option>Good</option>
+                <option>Fair</option>
+              </select>
+            </label>
+            <label>
+              Purchase Year
+              <input id="yearInput" name="year" type="number" min="1970" max="2100" placeholder="2026">
+            </label>
+          </div>
+
+          <label>
+            Notes
+            <textarea id="notesInput" name="notes" rows="3" placeholder="Region, edition, missing manual, wishlist notes..."></textarea>
+          </label>
+
+          <label>
+            Cover Art URL
+            <input id="coverInput" name="cover" type="url" placeholder="https://...">
+          </label>
+
+          <div id="lookupResult" class="lookup-result" hidden>
+            <div>
+              <span class="lookup-label">Lookup result</span>
+              <strong id="lookupTitle">No match yet</strong>
+              <p id="lookupMeta"></p>
+            </div>
+            <img id="lookupImage" alt="Game cover preview">
+          </div>
+
+          <div class="barcode-pill">
+            <span>Attached barcode</span>
+            <strong id="selectedBarcode">None yet</strong>
+          </div>
+
+          <button type="submit" class="button primary full-width">Add To Collection</button>
+        </form>
+      </section>
+    </section>
+
+    <section class="panel collection-panel">
+      <div class="panel-heading">
+        <div>
+          <p class="eyebrow">Library</p>
+          <h2>Your Collection</h2>
+        </div>
+        <div class="collection-actions">
+          <input id="searchInput" placeholder="Search title, platform, or barcode">
+          <button id="exportButton" class="button ghost">Export JSON</button>
+        </div>
+      </div>
+
+      <div id="emptyState" class="empty-state">
+        <h3>No games yet</h3>
+        <p>Scan a case or type in the UPC, then save the game details here.</p>
+      </div>
+
+      <div id="collectionList" class="collection-list"></div>
+    </section>
+  </main>
+
+  <template id="gameCardTemplate">
+    <article class="game-card">
+      <div class="game-card__header">
+        <div>
+          <h3 class="game-title"></h3>
+          <p class="game-platform"></p>
+        </div>
+        <button class="delete-button" type="button">Remove</button>
+      </div>
+      <img class="game-cover" alt="Game cover">
+      <div class="tag-row">
+        <span class="tag game-format"></span>
+        <span class="tag game-condition"></span>
+        <span class="tag game-year"></span>
+      </div>
+      <p class="game-barcode"></p>
+      <p class="game-notes"></p>
+    </article>
+  </template>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
