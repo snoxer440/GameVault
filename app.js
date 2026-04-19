@@ -14,6 +14,10 @@ const state = {
   hardwareModeEnabled: true,
   isLikelyIPhone: /iPhone|iPod/i.test(navigator.userAgent),
   lookup: null,
+  queueModeEnabled: true,
+  queuedBarcodes: [],
+  queueProcessing: false,
+  recentQueuedBarcodes: new Map(),
   reader: new BrowserMultiFormatReader(),
   scanControls: null,
   selectedBarcode: "",
@@ -44,6 +48,9 @@ const elements = {
   notesInput: document.querySelector("#notesInput"),
   platformCount: document.querySelector("#platformCount"),
   platformInput: document.querySelector("#platformInput"),
+  queueModeToggle: document.querySelector("#queueModeToggle"),
+  queuePreview: document.querySelector("#queuePreview"),
+  queueStatus: document.querySelector("#queueStatus"),
   scanPreview: document.querySelector("#scanPreview"),
   scannerFocusStatus: document.querySelector("#scannerFocusStatus"),
   scannerMessage: document.querySelector("#scannerMessage"),
@@ -64,6 +71,7 @@ function boot() {
     syncHardwareModeUI();
     syncScannerButtons(false);
     syncScannerFocusStatus();
+    syncQueueStatus();
     setScannerMessage(
       "Use the HW0006 Pro in Bluetooth HID mode for fast shelf scanning, or fall back to camera/photo scanning when needed."
     );
@@ -90,6 +98,7 @@ function attachEvents() {
   elements.gameForm.addEventListener("submit", handleGameSubmit);
   elements.hardwareModeToggle.addEventListener("change", handleModeToggleChange);
   elements.imageInput.addEventListener("change", handleImageScan);
+  elements.queueModeToggle.addEventListener("change", handleModeToggleChange);
   elements.searchInput.addEventListener("input", renderCollection);
   elements.exportButton.addEventListener("click", exportCollection);
   window.addEventListener("beforeunload", stopScanner);
@@ -215,6 +224,7 @@ async function handleImageScan(event) {
 }
 
 async function lookupSelectedBarcode() {
+  const triggeredFromQueue = arguments[0] && typeof arguments[0] === "object" ? arguments[0].fromQueue : false;
   const barcode = elements.barcodeInput.value.trim();
   if (!barcode) {
     setScannerMessage("Enter or scan a barcode first so I know what to look up.");
@@ -246,6 +256,9 @@ async function lookupSelectedBarcode() {
 
     if (state.autoSaveOnLookup && duplicates.length === 0 && canAutoSaveCurrentRecord()) {
       saveCurrentGameFromLookup();
+      if (triggeredFromQueue) {
+        processQueuedBarcodes();
+      }
       return;
     }
 
@@ -259,6 +272,11 @@ async function lookupSelectedBarcode() {
     setScannerMessage("Barcode lookup failed. This can happen when the API has no match or the browser blocks the request.");
   } finally {
     state.barcodeLookupPending = false;
+    if (triggeredFromQueue) {
+      state.queueProcessing = false;
+      syncQueueStatus();
+      processQueuedBarcodes();
+    }
   }
 }
 
@@ -413,7 +431,12 @@ function handleGameSubmit(event) {
 function handleBarcodeInputKeydown(event) {
   if (event.key === "Enter" || event.key === "Tab") {
     event.preventDefault();
-    lookupSelectedBarcode();
+    const barcode = elements.barcodeInput.value.trim();
+    if (state.queueModeEnabled && barcode) {
+      enqueueBarcode(barcode, { force: true });
+    } else {
+      lookupSelectedBarcode();
+    }
     return;
   }
 
@@ -443,6 +466,11 @@ function handleBarcodeInputChange() {
   if (/^\d{8,14}$/.test(value) && !state.barcodeLookupPending) {
     window.clearTimeout(handleBarcodeInputChange.timeoutId);
     handleBarcodeInputChange.timeoutId = window.setTimeout(() => {
+      if (state.queueModeEnabled && state.hardwareModeEnabled) {
+        enqueueBarcode(value);
+        return;
+      }
+
       lookupSelectedBarcode();
     }, 180);
   }
@@ -466,8 +494,10 @@ function handleModeToggleChange() {
   state.hardwareModeEnabled = elements.hardwareModeToggle.checked;
   state.autoSaveOnLookup = elements.autoSaveToggle.checked;
   state.focusLockEnabled = elements.focusLockToggle.checked;
+  state.queueModeEnabled = elements.queueModeToggle.checked;
   syncHardwareModeUI();
   syncScannerFocusStatus();
+  syncQueueStatus();
 
   if (state.focusLockEnabled) {
     focusBarcodeInput();
@@ -560,6 +590,7 @@ function syncHardwareModeUI() {
   elements.hardwareModeToggle.checked = state.hardwareModeEnabled;
   elements.autoSaveToggle.checked = state.autoSaveOnLookup;
   elements.focusLockToggle.checked = state.focusLockEnabled;
+  elements.queueModeToggle.checked = state.queueModeEnabled;
 }
 
 function syncScannerFocusStatus() {
@@ -640,6 +671,88 @@ function saveCurrentGameFromLookup() {
   saveCollection();
   renderCollection();
   resetFormState(record.title);
+  if (state.queueProcessing) {
+    state.queueProcessing = false;
+    syncQueueStatus();
+    processQueuedBarcodes();
+  }
+}
+
+function enqueueBarcode(barcode, options = {}) {
+  const trimmed = String(barcode || "").trim();
+  if (!trimmed) {
+    return;
+  }
+
+  const now = Date.now();
+  cleanupRecentQueuedBarcodes(now);
+  const lastQueuedAt = state.recentQueuedBarcodes.get(trimmed);
+  if (!options.force && lastQueuedAt && now - lastQueuedAt < 1500) {
+    return;
+  }
+
+  state.recentQueuedBarcodes.set(trimmed, now);
+  state.queuedBarcodes.push(trimmed);
+  elements.barcodeInput.value = "";
+  state.selectedBarcode = "";
+  elements.selectedBarcode.textContent = "Queued";
+  syncQueueStatus();
+  processQueuedBarcodes();
+}
+
+function processQueuedBarcodes() {
+  if (!state.queueModeEnabled || state.queueProcessing || state.barcodeLookupPending) {
+    syncQueueStatus();
+    return;
+  }
+
+  const nextBarcode = state.queuedBarcodes.shift();
+  if (!nextBarcode) {
+    syncQueueStatus();
+    return;
+  }
+
+  state.queueProcessing = true;
+  elements.barcodeInput.value = nextBarcode;
+  state.selectedBarcode = nextBarcode;
+  elements.selectedBarcode.textContent = nextBarcode;
+  renderDuplicateNotice(findPotentialDuplicates(nextBarcode, elements.titleInput.value));
+  syncQueueStatus(`Processing ${nextBarcode}`);
+  lookupSelectedBarcode({ fromQueue: true });
+}
+
+function cleanupRecentQueuedBarcodes(now = Date.now()) {
+  state.recentQueuedBarcodes.forEach((timestamp, barcode) => {
+    if (now - timestamp > 4000) {
+      state.recentQueuedBarcodes.delete(barcode);
+    }
+  });
+}
+
+function syncQueueStatus(overrideText = "") {
+  if (overrideText) {
+    elements.queueStatus.textContent = overrideText;
+    elements.queueStatus.classList.add("is-live");
+  } else if (state.queueProcessing) {
+    elements.queueStatus.textContent = `Processing • ${state.queuedBarcodes.length} waiting`;
+    elements.queueStatus.classList.add("is-live");
+  } else if (state.queuedBarcodes.length) {
+    elements.queueStatus.textContent = `${state.queuedBarcodes.length} queued`;
+    elements.queueStatus.classList.add("is-live");
+  } else {
+    elements.queueStatus.textContent = state.queueModeEnabled ? "Queue idle" : "Queue off";
+    elements.queueStatus.classList.remove("is-live");
+  }
+
+  if (!state.queuedBarcodes.length) {
+    elements.queuePreview.hidden = true;
+    elements.queuePreview.textContent = "";
+    return;
+  }
+
+  const preview = state.queuedBarcodes.slice(0, 4).join(", ");
+  elements.queuePreview.hidden = false;
+  elements.queuePreview.textContent = `Queued scans: ${preview}${state.queuedBarcodes.length > 4 ? "..." : ""}`;
 }
 
 async function registerServiceWorker() {
