@@ -212,6 +212,59 @@ body {
   margin-top: 1.2rem;
 }
 
+.scanner-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.scanner-mode-card {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.9rem 1rem;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.scanner-mode-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.toggle-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: var(--text);
+}
+
+.toggle-row input {
+  width: auto;
+  accent-color: var(--accent-strong);
+}
+
+.focus-status,
+.duplicate-notice {
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+.focus-status.is-live {
+  color: var(--accent);
+}
+
+.duplicate-notice {
+  padding: 0.75rem 0.9rem;
+  border-radius: 14px;
+  background: rgba(255, 127, 127, 0.1);
+  color: #ffc0c0;
+}
+
 .input-row,
 .form-columns {
   display: grid;

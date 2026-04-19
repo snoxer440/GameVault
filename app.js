@@ -5,7 +5,13 @@ const UPC_LOOKUP_URL = "https://api.upcitemdb.com/prod/trial/lookup";
 const LOOKUP_PROXY_URL = "https://corsproxy.org/?";
 
 const state = {
+  autoSaveOnLookup: false,
+  burstStartTime: 0,
+  charsSinceBurstStart: 0,
   collection: loadCollection(),
+  barcodeLookupPending: false,
+  focusLockEnabled: true,
+  hardwareModeEnabled: true,
   isLikelyIPhone: /iPhone|iPod/i.test(navigator.userAgent),
   lookup: null,
   reader: new BrowserMultiFormatReader(),
@@ -14,17 +20,21 @@ const state = {
 };
 
 const elements = {
+  autoSaveToggle: document.querySelector("#autoSaveToggle"),
   barcodeInput: document.querySelector("#barcodeInput"),
   cameraPreview: document.querySelector("#cameraPreview"),
   collectionCount: document.querySelector("#collectionCount"),
   collectionList: document.querySelector("#collectionList"),
   conditionInput: document.querySelector("#conditionInput"),
   coverInput: document.querySelector("#coverInput"),
+  duplicateNotice: document.querySelector("#duplicateNotice"),
   emptyState: document.querySelector("#emptyState"),
   exportButton: document.querySelector("#exportButton"),
+  focusLockToggle: document.querySelector("#focusLockToggle"),
   formatInput: document.querySelector("#formatInput"),
   gameCardTemplate: document.querySelector("#gameCardTemplate"),
   gameForm: document.querySelector("#gameForm"),
+  hardwareModeToggle: document.querySelector("#hardwareModeToggle"),
   imageInput: document.querySelector("#imageInput"),
   lookupBarcodeButton: document.querySelector("#lookupBarcodeButton"),
   lookupImage: document.querySelector("#lookupImage"),
@@ -35,6 +45,7 @@ const elements = {
   platformCount: document.querySelector("#platformCount"),
   platformInput: document.querySelector("#platformInput"),
   scanPreview: document.querySelector("#scanPreview"),
+  scannerFocusStatus: document.querySelector("#scannerFocusStatus"),
   scannerMessage: document.querySelector("#scannerMessage"),
   searchInput: document.querySelector("#searchInput"),
   selectedBarcode: document.querySelector("#selectedBarcode"),
@@ -50,10 +61,13 @@ function boot() {
   try {
     renderCollection();
     attachEvents();
+    syncHardwareModeUI();
     syncScannerButtons(false);
+    syncScannerFocusStatus();
     setScannerMessage(
-      "Use Live Scan on supporting devices, or use Scan From Photo on iPhone to capture the barcode with the rear camera."
+      "Use the HW0006 Pro in Bluetooth HID mode for fast shelf scanning, or fall back to camera/photo scanning when needed."
     );
+    focusBarcodeInput();
     registerServiceWorker();
   } catch (error) {
     console.error("App boot failed", error);
@@ -66,12 +80,20 @@ function boot() {
 function attachEvents() {
   elements.startScannerButton.addEventListener("click", startLiveScanner);
   elements.stopScannerButton.addEventListener("click", stopScanner);
+  elements.autoSaveToggle.addEventListener("change", handleModeToggleChange);
+  elements.barcodeInput.addEventListener("keydown", handleBarcodeInputKeydown);
+  elements.barcodeInput.addEventListener("input", handleBarcodeInputChange);
+  elements.barcodeInput.addEventListener("focus", syncScannerFocusStatus);
+  elements.barcodeInput.addEventListener("blur", handleBarcodeBlur);
+  elements.focusLockToggle.addEventListener("change", handleModeToggleChange);
   elements.lookupBarcodeButton.addEventListener("click", lookupSelectedBarcode);
   elements.gameForm.addEventListener("submit", handleGameSubmit);
+  elements.hardwareModeToggle.addEventListener("change", handleModeToggleChange);
   elements.imageInput.addEventListener("change", handleImageScan);
   elements.searchInput.addEventListener("input", renderCollection);
   elements.exportButton.addEventListener("click", exportCollection);
   window.addEventListener("beforeunload", stopScanner);
+  document.addEventListener("visibilitychange", syncScannerFocusStatus);
 }
 
 function loadCollection() {
@@ -199,6 +221,11 @@ async function lookupSelectedBarcode() {
     return;
   }
 
+  if (state.barcodeLookupPending) {
+    return;
+  }
+
+  state.barcodeLookupPending = true;
   state.selectedBarcode = barcode;
   elements.selectedBarcode.textContent = barcode;
   setScannerMessage(`Looking up product info for barcode ${barcode}.`);
@@ -214,10 +241,24 @@ async function lookupSelectedBarcode() {
 
     state.lookup = item;
     applyLookupToForm(item);
-    setScannerMessage("Found a product match and filled in the form where possible.");
+    const duplicates = findPotentialDuplicates(barcode, elements.titleInput.value);
+    renderDuplicateNotice(duplicates);
+
+    if (state.autoSaveOnLookup && duplicates.length === 0 && canAutoSaveCurrentRecord()) {
+      saveCurrentGameFromLookup();
+      return;
+    }
+
+    setScannerMessage(
+      duplicates.length
+        ? "Found a product match, but this game may already be in your collection."
+        : "Found a product match and filled in the form where possible."
+    );
   } catch (error) {
     console.error(error);
     setScannerMessage("Barcode lookup failed. This can happen when the API has no match or the browser blocks the request.");
+  } finally {
+    state.barcodeLookupPending = false;
   }
 }
 
@@ -257,6 +298,7 @@ function applyDetectedBarcode(barcode) {
   elements.barcodeInput.value = trimmed;
   state.selectedBarcode = trimmed;
   elements.selectedBarcode.textContent = trimmed;
+  renderDuplicateNotice(findPotentialDuplicates(trimmed, elements.titleInput.value));
   setScannerMessage(`Detected barcode ${trimmed}. Running lookup next can prefill the game details.`);
   lookupSelectedBarcode();
 }
@@ -365,33 +407,71 @@ function inferYear(source) {
 
 function handleGameSubmit(event) {
   event.preventDefault();
+  saveCurrentGameFromLookup();
+}
 
-  const formData = new FormData(elements.gameForm);
-  const title = String(formData.get("title") || "").trim();
-  const platform = String(formData.get("platform") || "").trim();
-
-  if (!title || !platform) {
-    setScannerMessage("Title and platform are required before saving a game.");
+function handleBarcodeInputKeydown(event) {
+  if (event.key === "Enter" || event.key === "Tab") {
+    event.preventDefault();
+    lookupSelectedBarcode();
     return;
   }
 
-  const record = {
-    id: crypto.randomUUID(),
-    title,
-    platform,
-    format: String(formData.get("format") || "Physical"),
-    condition: String(formData.get("condition") || "Good"),
-    year: String(formData.get("year") || "").trim() || "Unknown year",
-    notes: String(formData.get("notes") || "").trim(),
-    barcode: state.selectedBarcode || elements.barcodeInput.value.trim() || "No barcode",
-    cover: String(formData.get("cover") || "").trim(),
-    createdAt: new Date().toISOString(),
-  };
+  if (event.key.length !== 1) {
+    return;
+  }
 
-  state.collection.unshift(record);
-  saveCollection();
-  renderCollection();
-  resetFormState(record.title);
+  const now = Date.now();
+  if (now - state.burstStartTime > 120) {
+    state.burstStartTime = now;
+    state.charsSinceBurstStart = 0;
+  }
+
+  state.charsSinceBurstStart += 1;
+}
+
+function handleBarcodeInputChange() {
+  const value = elements.barcodeInput.value.trim();
+  state.selectedBarcode = value;
+  elements.selectedBarcode.textContent = value || "None yet";
+  renderDuplicateNotice(findPotentialDuplicates(value, elements.titleInput.value));
+
+  if (!value) {
+    return;
+  }
+
+  if (/^\d{8,14}$/.test(value) && !state.barcodeLookupPending) {
+    window.clearTimeout(handleBarcodeInputChange.timeoutId);
+    handleBarcodeInputChange.timeoutId = window.setTimeout(() => {
+      lookupSelectedBarcode();
+    }, 180);
+  }
+}
+
+function handleBarcodeBlur() {
+  syncScannerFocusStatus();
+  const activeElement = document.activeElement;
+  if (activeElement && elements.gameForm.contains(activeElement) && activeElement !== elements.barcodeInput) {
+    return;
+  }
+
+  if (state.focusLockEnabled) {
+    window.setTimeout(() => {
+      focusBarcodeInput();
+    }, 80);
+  }
+}
+
+function handleModeToggleChange() {
+  state.hardwareModeEnabled = elements.hardwareModeToggle.checked;
+  state.autoSaveOnLookup = elements.autoSaveToggle.checked;
+  state.focusLockEnabled = elements.focusLockToggle.checked;
+  syncHardwareModeUI();
+  syncScannerFocusStatus();
+
+  if (state.focusLockEnabled) {
+    focusBarcodeInput();
+  }
 }
 
 function renderCollection() {
@@ -440,6 +520,7 @@ function deleteGame(id) {
   state.collection = state.collection.filter((game) => game.id !== id);
   saveCollection();
   renderCollection();
+  renderDuplicateNotice(findPotentialDuplicates(elements.barcodeInput.value, elements.titleInput.value));
 }
 
 function exportCollection() {
@@ -461,7 +542,9 @@ function resetFormState(savedTitle) {
   elements.imageInput.value = "";
   clearLookupResult();
   state.selectedBarcode = "";
+  renderDuplicateNotice([]);
   setScannerMessage(`Saved ${savedTitle} to your collection.`);
+  focusBarcodeInput();
 }
 
 function setScannerMessage(message) {
@@ -471,6 +554,92 @@ function setScannerMessage(message) {
 function syncScannerButtons(isScanning) {
   elements.startScannerButton.disabled = isScanning;
   elements.stopScannerButton.disabled = !isScanning;
+}
+
+function syncHardwareModeUI() {
+  elements.hardwareModeToggle.checked = state.hardwareModeEnabled;
+  elements.autoSaveToggle.checked = state.autoSaveOnLookup;
+  elements.focusLockToggle.checked = state.focusLockEnabled;
+}
+
+function syncScannerFocusStatus() {
+  const focused = document.activeElement === elements.barcodeInput;
+  elements.scannerFocusStatus.textContent = focused
+    ? "Scanner ready"
+    : state.focusLockEnabled
+      ? "Refocusing scanner box..."
+      : "Tap the scan box before scanning";
+  elements.scannerFocusStatus.classList.toggle("is-live", focused);
+}
+
+function focusBarcodeInput() {
+  if (!state.hardwareModeEnabled) {
+    syncScannerFocusStatus();
+    return;
+  }
+
+  elements.barcodeInput.focus({ preventScroll: true });
+  syncScannerFocusStatus();
+}
+
+function findPotentialDuplicates(barcode, title) {
+  const normalizedBarcode = String(barcode || "").trim().toLowerCase();
+  const normalizedTitle = String(title || "").trim().toLowerCase();
+
+  return state.collection.filter((game) => {
+    const sameBarcode = normalizedBarcode && game.barcode.toLowerCase() === normalizedBarcode;
+    const sameTitle = normalizedTitle && game.title.toLowerCase() === normalizedTitle;
+    return sameBarcode || sameTitle;
+  });
+}
+
+function renderDuplicateNotice(duplicates) {
+  if (!duplicates.length) {
+    elements.duplicateNotice.hidden = true;
+    elements.duplicateNotice.textContent = "";
+    return;
+  }
+
+  const preview = duplicates
+    .slice(0, 2)
+    .map((game) => `${game.title} (${game.platform})`)
+    .join(", ");
+
+  elements.duplicateNotice.hidden = false;
+  elements.duplicateNotice.textContent = `Possible duplicate${duplicates.length > 1 ? "s" : ""}: ${preview}`;
+}
+
+function canAutoSaveCurrentRecord() {
+  return Boolean(elements.titleInput.value.trim() && elements.platformInput.value.trim());
+}
+
+function saveCurrentGameFromLookup() {
+  const formData = new FormData(elements.gameForm);
+  const title = String(formData.get("title") || "").trim();
+  const platform = String(formData.get("platform") || "").trim();
+
+  if (!title || !platform) {
+    setScannerMessage("Title and platform are required before saving a game.");
+    return;
+  }
+
+  const record = {
+    id: crypto.randomUUID(),
+    title,
+    platform,
+    format: String(formData.get("format") || "Physical"),
+    condition: String(formData.get("condition") || "Good"),
+    year: String(formData.get("year") || "").trim() || "Unknown year",
+    notes: String(formData.get("notes") || "").trim(),
+    barcode: state.selectedBarcode || elements.barcodeInput.value.trim() || "No barcode",
+    cover: String(formData.get("cover") || "").trim(),
+    createdAt: new Date().toISOString(),
+  };
+
+  state.collection.unshift(record);
+  saveCollection();
+  renderCollection();
+  resetFormState(record.title);
 }
 
 async function registerServiceWorker() {

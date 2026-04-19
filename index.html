@@ -70,6 +70,29 @@
             <input id="barcodeInput" name="barcodeInput" placeholder="Scan or type a barcode">
             <button id="lookupBarcodeButton" class="button secondary">Lookup</button>
           </div>
+          <div class="scanner-mode-card">
+            <div class="scanner-mode-row">
+              <label class="toggle-row">
+                <input id="hardwareModeToggle" type="checkbox" checked>
+                <span>HW0006 Pro mode</span>
+              </label>
+              <label class="toggle-row">
+                <input id="autoSaveToggle" type="checkbox">
+                <span>Auto-save on match</span>
+              </label>
+            </div>
+            <div class="scanner-mode-row">
+              <label class="toggle-row">
+                <input id="focusLockToggle" type="checkbox" checked>
+                <span>Keep scan box focused</span>
+              </label>
+              <span id="scannerFocusStatus" class="focus-status">Waiting for scanner</span>
+            </div>
+            <div id="duplicateNotice" class="duplicate-notice" hidden></div>
+          </div>
+          <p class="scanner-hint">
+            Pair the HW0006 Pro in Bluetooth HID mode. It should type into this box like a keyboard, and a suffix like Enter works best for fast scanning.
+          </p>
           <img id="scanPreview" class="scan-preview" alt="Barcode scan preview">
         </div>
       </section>
