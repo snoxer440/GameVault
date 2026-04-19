@@ -85,6 +85,12 @@ body {
   line-height: 1.6;
 }
 
+.build-stamp {
+  margin: 0.1rem 0 0.6rem;
+  color: var(--accent-warm);
+  font-size: 0.88rem;
+}
+
 .hero-stats {
   display: grid;
   gap: 1rem;

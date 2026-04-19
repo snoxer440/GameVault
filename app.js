@@ -1,5 +1,6 @@
 import { BrowserMultiFormatReader, NotFoundException } from "https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/+esm";
 
+const BUILD_VERSION = "2026-04-19-lookup-fix-2";
 const STORAGE_KEY = "checkpoint-shelf-games";
 const UPC_LOOKUP_URL = "https://api.upcitemdb.com/prod/trial/lookup";
 const LOOKUP_PROXY_URL = "https://corsproxy.org/?";
@@ -28,6 +29,7 @@ const state = {
 const elements = {
   autoSaveToggle: document.querySelector("#autoSaveToggle"),
   barcodeInput: document.querySelector("#barcodeInput"),
+  buildStamp: document.querySelector("#buildStamp"),
   cameraPreview: document.querySelector("#cameraPreview"),
   collectionCount: document.querySelector("#collectionCount"),
   collectionList: document.querySelector("#collectionList"),
@@ -72,6 +74,7 @@ function boot() {
   try {
     renderCollection();
     attachEvents();
+    renderBuildStamp();
     syncHardwareModeUI();
     syncScannerButtons(false);
     syncScannerFocusStatus();
@@ -81,7 +84,7 @@ function boot() {
       "Use the HW0006 Pro in Bluetooth HID mode for fast shelf scanning, or fall back to camera/photo scanning when needed."
     );
     focusBarcodeInput();
-    registerServiceWorker();
+    unregisterServiceWorkers();
   } catch (error) {
     console.error("App boot failed", error);
     if (elements.scannerMessage) {
@@ -935,4 +938,25 @@ async function registerServiceWorker() {
   } catch (error) {
     console.error("Service worker registration failed", error);
   }
+}
+
+async function unregisterServiceWorkers() {
+  if (!("serviceWorker" in navigator)) {
+    return;
+  }
+
+  try {
+    const registrations = await navigator.serviceWorker.getRegistrations();
+    await Promise.all(registrations.map((registration) => registration.unregister()));
+    if ("caches" in window) {
+      const cacheKeys = await caches.keys();
+      await Promise.all(cacheKeys.map((key) => caches.delete(key)));
+    }
+  } catch (error) {
+    console.error("Service worker cleanup failed", error);
+  }
+}
+
+function renderBuildStamp() {
+  elements.buildStamp.textContent = `Build ${BUILD_VERSION}`;
 }
